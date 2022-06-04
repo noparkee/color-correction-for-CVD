@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torchvision.models
 import torch.nn.functional as F
-import wandb
-from collections import OrderedDict
 
 
 
@@ -43,6 +41,9 @@ class Identity(nn.Module):
 
 
 
+###############
+# for Filter  #
+###############
 class Filter(nn.Module):
     def __init__(self, device):
         super(Filter, self).__init__()
@@ -94,63 +95,58 @@ class Filter(nn.Module):
         return filtered_image
 
 
-class OurModel(nn.Module):
-    def __init__(self, device):
-        super(OurModel, self).__init__()
 
-        self.featurizer = ResNet()
-        self.classifier = nn.Linear(self.featurizer.n_outputs, 10)
-        
-        self.filtering = Filter(device)
+###############
+#  for U-net  #
+###############
+class DoubleConv(nn.Module):
+    def __init__(self, nin, nout):
+        super().__init__()
+        self.double_conv = nn.Sequential(nn.Conv2d(nin, nout, 3, padding=1, stride=1),
+                                         nn.BatchNorm2d(nout),
+                                         nn.ReLU(inplace=True),
+                                         nn.Conv2d(nout, nout, 3, padding=1, stride=1),
+                                         nn.BatchNorm2d(nout),
+                                         nn.ReLU(inplace=True)
+                                         )
 
-    def forward(self, x, y, i):
-        # cvd - log용
-        cvd_image = self.filtering.apply_cvd(x)
+    def forward(self, x):
+        return self.double_conv(x)
 
-        # 어떤 필터 적용
-        filtered_image = self.filtering.apply_filter(x)
-        # cvd 필터 적용
-        cvd_filtered_image = self.filtering.apply_cvd(filtered_image)
 
-        ### 두 개가 큰 차이 없는거 같옹
-        naturalness_loss = F.mse_loss(cvd_filtered_image, x)
-        #naturalness_loss = ((cvd_filtered_image - x) ** 2).mean()
+class Down(nn.Module):
+    def __init__(self, nin, nout):
+        super().__init__()
+        self.down_conv = nn.Sequential(nn.MaxPool2d(2),
+                                       DoubleConv(nin, nout))
 
-        image_features = self.featurizer(cvd_filtered_image)
-        cls_outputs = self.classifier(image_features)
-        cls_loss = F.cross_entropy(cls_outputs, y)
+    def forward(self, x):
+        return self.down_conv(x)
 
-        loss = 10 * cls_loss + naturalness_loss
 
-        ### log
-        if i == 0 or i % 100 == 99:
-            wandb.log({"original": [wandb.Image(x)], "cvd": [wandb.Image(cvd_image)], \
-                        "filtered": [wandb.Image(filtered_image)], "cvd_filtered": [wandb.Image(cvd_filtered_image)]})
+class Up(nn.Module):
+    def __init__(self, nin, nout):
+        super().__init__()
+        self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.double_conv = DoubleConv(nin, nout)
 
-        return OrderedDict({'loss': loss, 'cls_loss': cls_loss, 'naturalness': naturalness_loss})
-    
-    def evaluate(self, x, y):
-        # cvd - log용
-        cvd_image = self.filtering.apply_cvd(x)
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+        # padding
+        diffY = x2.size()[2] - x1.size()[2]
+        diffX = x2.size()[3] - x1.size()[3]
+        x1 = F.pad(x1, (diffX // 2, diffX - diffX // 2,
+                        diffY // 2, diffY - diffY // 2))
 
-        # 어떤 필터 적용
-        filtered_image = self.filtering.apply_filter(x)
-        # cvd 필터 적용
-        cvd_filtered_image = self.filtering.apply_cvd(filtered_image)
+        x = torch.cat([x2, x1], dim=1)
+        x = self.double_conv(x)
+        return x
 
-        ### 두 개가 큰 차이 없는거 같옹
-        naturalness_loss = F.mse_loss(cvd_filtered_image, x)
-        #naturalness_loss = ((cvd_filtered_image - x) ** 2).mean()
 
-        image_features = self.featurizer(cvd_filtered_image)
-        cls_outputs = self.classifier(image_features)
-        cls_loss = F.cross_entropy(cls_outputs, y)
+class OutConv(nn.Module):
+    def __init__(self, nin, nout):
+        super(OutConv, self).__init__()
+        self.conv = nn.Conv2d(nin, nout, kernel_size=1)
 
-        correct = (cls_outputs.argmax(1).eq(y).float()).sum().item()
-        total = float(len(x))
-    
-        wandb.log({"test_original": [wandb.Image(x)], "test_cvd": [wandb.Image(cvd_image)], \
-                    "test_filtered": [wandb.Image(filtered_image)], "test_cvd_filtered": [wandb.Image(cvd_filtered_image)]})
-
-        return correct, total
-
+    def forward(self, x):
+        return self.conv(x)

@@ -8,8 +8,8 @@ import torch
 from torch.utils.data import DataLoader
 import wandb
 
-from data import IshiharaDataset
-from network import OurModel
+from data import IshiharaDataset, Food11Dataset
+from model import OurModel, UNet
 
 
 
@@ -18,6 +18,7 @@ from network import OurModel
 parser = argparse.ArgumentParser()
 parser.add_argument("--log", default='tmp')
 parser.add_argument("--seed", default=0)
+parser.add_argument("--dataset", type=str)
 args = parser.parse_args()
 
 ### seed 고정
@@ -28,22 +29,28 @@ random.seed(args.seed)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-training_data = IshiharaDataset(train_flag=True)
-training_loader = DataLoader(training_data, batch_size=1, shuffle=True)
-testing_data = IshiharaDataset(train_flag=False)
-testing_loader = DataLoader(testing_data, batch_size=1, shuffle=True)
+if args.dataset == "ishihara":
+    training_data = IshiharaDataset(train_flag=True)
+    testing_data = IshiharaDataset(train_flag=False)
+elif args.dataset == "food11":
+    training_data = Food11Dataset(train_flag=True)
+    testing_data = Food11Dataset(train_flag=False)
+
+training_loader = DataLoader(training_data, batch_size=4, shuffle=True)
+testing_loader = DataLoader(testing_data, batch_size=4, shuffle=True)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 EPOCH = 15
 
 wandb.init(
     project='moonshot',
-    name=f'{args.log}',
+    name=f'{args.dataset}-{args.log}',
     entity='noparkee',
     )
 print('Results are now reporting to WANDB (wandb.ai)')
 
-our_model = OurModel(device).to(device)
+#our_model = OurModel(device, training_data.num_class).to(device)
+our_model = UNet(device, training_data.num_class).to(device)
 opt = torch.optim.Adam(our_model.parameters())
 
 our_model.train()
@@ -71,22 +78,19 @@ for e in range(EPOCH):
             epoch_loss = 0.0
     
     ### test
-    ### testing 기준을 뭐로 삼지????? - 3번의 epoch 마다
-    if e == 0 or (e+1) % 3 == 0:
-        our_model.eval()
-        correct, total = 0, 0
-        for test_data in testing_loader:
-            x, y = test_data
-            x = x.to(device)
-            y = y.to(device)
+    ### 매 epoch 마다
+    our_model.eval()
+    correct, total = 0, 0
+    for test_data in testing_loader:
+        x, y = test_data
+        x = x.to(device)
+        y = y.to(device)
+        with torch.no_grad():
+            c, t = our_model.evaluate(x, y)
+            correct += c
+            total += t
 
-            with torch.no_grad():
-                c, t = our_model.evaluate(x, y)
-
-                correct += c
-                total += t
-
-        print(f'Accuracy of the network on the 10000 test images: {100 * correct / total} %')
+    print(f'Accuracy of the network on the 10000 test images: {100 * correct / total} %')
 
     if not os.path.exists(f'results/models/{args.log}'):
         os.makedirs(f'results/models/{args.log}')

@@ -53,3 +53,41 @@ class IshiharaDataset(torch.utils.data.Dataset):
     
     def __len__(self):
         return len(self.file_names)
+
+
+class Food11Dataset(torch.utils.data.Dataset):
+    def __init__(self, train_flag):
+        self.train_flag = train_flag
+        if self.train_flag:
+            self.data_path = "data/food-11/training"
+        else:
+            self.data_path = "data/food-11/evaluation"
+        
+        self.class_names = os.listdir(self.data_path)
+        self.file_names = []
+        
+        for path, dirs, files in os.walk(self.data_path):
+            for file in files:
+                file_path = os.path.join(path, file)
+                self.file_names.append(file_path)
+
+        self.num_class = 11
+
+        self.transform_train, self.transform_eval = get_transforms()
+
+        self.class_label = {"Bread": 0, "Dairy product": 1, "Dessert": 2, "Egg": 3, "Fried food": 4, "Meat": 5, \
+                            "Noodles-Pasta": 6, "Rice": 7, "Seafood": 8, "Soup": 9, "Vegetable-Fruit": 10}
+
+    def __getitem__(self, idx):
+        img_path = self.file_names[idx]
+        #image = read_image(img_path)
+        image = Image.open(img_path).convert('RGB')
+        image = self.transform_train(image)
+        label = self.class_label[self.file_names[idx].split('/')[-2]]
+
+        return image, label
+    
+    def __len__(self):
+        return len(self.file_names)
+
+        
